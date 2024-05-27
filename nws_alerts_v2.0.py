@@ -29,7 +29,7 @@
 #xml parsing. Added logging, mysql storage supports POLYGON and
 #JSON data types updated data types in script to utilize.
 
-#TODO - add event to database
+#TODO - add event to database DONE 5/27/24
 '''
 mysql table, alerts2 compatible with this script
 +-------------+----------+------+-----+---------+----------------+
@@ -37,6 +37,7 @@ mysql table, alerts2 compatible with this script
 +-------------+----------+------+-----+---------+----------------+
 | id          | int      | NO   | PRI | NULL    | auto_increment |
 | date        | datetime | YES  |     | NULL    |                |
+| event       | text     | YES  |     | NULL    |                |
 | title       | text     | YES  |     | NULL    |                |
 | link        | text     | YES  |     | NULL    |                |
 | summary     | text     | YES  |     | NULL    |                |
@@ -52,6 +53,7 @@ from datetime import datetime
 import logging
 import mysql.connector
 import json
+from flask import Flask, jsonify, render_template
 
 #===================================================================
 #file names - change to suit your needs
@@ -173,6 +175,7 @@ def find_immediate_urgency_entries(url):
                 mysql_polygon = 'POLYGON((' + ','.join([f'{lat} {lon}' for lon, lat in points]) + '))'
                 polygons.append(mysql_polygon)
 
+
 # Function to check if all lists have the same length
 def check_equal_lengths(lists):
     lengths = {name: len(lst) for name, lst in lists.items()}
@@ -182,7 +185,7 @@ def check_equal_lengths(lists):
     return len(set(lengths.values())) == 1
 
 # Function to convert a polygon string to KML format with additional info
-def polygon_to_kml(polygon, title, link, summary, published_date, affected_area):
+def polygon_to_kml(polygon, event, title, link, summary, published_date, affected_area):
     # Remove the 'POLYGON((' prefix and '))' suffix
     coordinates = polygon[len("POLYGON(("):-2]
     
@@ -194,6 +197,7 @@ def polygon_to_kml(polygon, title, link, summary, published_date, affected_area)
         <name>{title}</name>
         <description><![CDATA[
             <a href="{link}">{title}</a><br/>
+            <b>Event:</b> {event}<br/>
             <b>Summary:</b> {summary}<br/>
             <b>Published Date:</b> {published_date}<br/>
             <b>Affected Area:</b> {affected_area}<br/>
@@ -217,9 +221,9 @@ def polygon_to_kml(polygon, title, link, summary, published_date, affected_area)
     """
 
 # Function to generate KML file with polygons and pertinent info
-def generate_kml(polygons, titles, links, summaries, published_dates, affected_areas_list):
+def generate_kml(polygons, events, titles, links, summaries, published_dates, affected_areas_list):
     placemarks = ''.join(
-        polygon_to_kml(polygons[i], titles[i], links[i], summaries[i], published_dates[i], affected_areas_list[i])
+        polygon_to_kml(polygons[i], events[i], titles[i], links[i], summaries[i], published_dates[i], affected_areas_list[i])
         for i in range(len(polygons))
     )
     return f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -232,15 +236,17 @@ def generate_kml(polygons, titles, links, summaries, published_dates, affected_a
 """
 
 # Function to insert data into the alerts2 table
-def insert_data(date, title, link, summary, areas, coordinates):
+def insert_data(date, event, title, link, summary, areas, coordinates):
     insert_query = """
-    INSERT INTO alerts2 (date, title, link, summary, areas, coordinates)
-    VALUES (%s, %s, %s, %s, %s, ST_GeomFromText(%s))
+    INSERT INTO alerts2 (date, event, title, link, summary, areas, coordinates)
+    VALUES (%s, %s, %s, %s, %s, %s, ST_GeomFromText(%s))
     """
     areas_json = json.dumps(areas)  # Convert areas list to JSON string
+    event_str = '; '.join(event)  # Convert event list to a string
     try:
         logging.info(f"Executing query: {insert_query}")
-        cursor.execute(insert_query, (date, title, link, summary, areas_json, coordinates))
+        logging.info(f"Parameters: {date}, {event_str}, {title}, {link}, {summary}, {areas_json}, {coordinates}")
+        cursor.execute(insert_query, (date, event_str, title, link, summary, areas_json, coordinates))
         conn.commit()
     except mysql.connector.Error as e:
         logging.error(f"Error inserting data: {e}")
@@ -250,6 +256,7 @@ def insert_data(date, title, link, summary, areas, coordinates):
 #===================================================================
  
 find_immediate_urgency_entries(url)
+
 #print(f"Number of immediate entries found: {len(immediate_entries)}")
 logging.info(f"Number of immediate entries found: {len(immediate_entries)}")
 
@@ -267,7 +274,7 @@ else:
     logging.error("Lists have different lengths.")
 
 # Generate the KML file for google earth
-kml_content = generate_kml(polygons, titles, links, summaries, published_dates, affected_areas_list)
+kml_content = generate_kml(polygons, events, titles, links, summaries, published_dates, affected_areas_list)
 
 # Write the KML content to a file
 with open(kmlfilename, "w") as file:
@@ -281,7 +288,7 @@ cursor = conn.cursor()
 
 # Loop through the data and insert into the database
 for i in range(len(polygons)):
-    insert_data(published_dates[i], titles[i], links[i], summaries[i], affected_areas_list[i], polygons[i])
+    insert_data(published_dates[i], events[i], titles[i], links[i], summaries[i], affected_areas_list[i], polygons[i])
 
 # Close the database connection and log
 cursor.close()
@@ -292,6 +299,7 @@ logging.info("Data inserted successfully into the alerts2 table.")
 for i in range(len(polygons)):
     alert_data = {
         "date": published_dates[i],
+        "event": events[i],
         "title": titles[i],
         "link": links[i],
         "summary": summaries[i],
@@ -307,7 +315,5 @@ with open(json_filename, "w") as json_file:
 
 logging.info(f"JSON data written to {json_filename} successfully.")
 
-
-#TODO - generate html file
-
 logging.info("/////////////////////////////////////////////////////////////////////////////////////\n")
+#TODO - generate html file
