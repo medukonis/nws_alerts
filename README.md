@@ -20,3 +20,9 @@ sample mysql table, compatible with this script
 | areas       | JSON     | YES  |     | NULL    |                |
 | coordinates | POLYGON  | YES  |     | NULL    |                |
 +-------------+----------+------+-----+---------+----------------+
+6/15/2024
+added search, sort, and paging options from DataTables and jquery to generate_htmlfunction
+TODO install these localy
+TODO add links for kml, json files.
+TODO clarify updated date/time to show date/time script was run and date/time nwsupdated their info.
+TODO look at changing published date to UTC or EASTERN?  Right now they are local
