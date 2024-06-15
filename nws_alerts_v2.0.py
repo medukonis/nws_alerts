@@ -51,20 +51,22 @@ import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
 import logging
-import mysql.connector
+import pymysql
 import json
-from flask import Flask, jsonify, render_template
+
+# Add a global variable to hold the update time
+update_time = ""
 
 #===================================================================
 #file names - change to suit your needs
 #===================================================================
 logfilename = "nws_alerts.log"
 kmlfilename = "nws_alerts.kml"
-#httpfilename = "/home/medukonis/bin/nws_alerts.html"
 jsonfilename = "nws_alerts.json"
+htmlfilename = "nws_alerts.html"
 # URL of the file on the server
-url = 'https://edukonis.com/~medukonis/active.atom'
-#url = 'https://alerts.weather.gov/cap/us.php?x=0'
+#url = 'https://edukonis.com/~medukonis/active.atom' #for testing
+url = 'https://alerts.weather.gov/cap/us.php?x=0'
 
 
 logging.basicConfig(filename=logfilename, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -114,6 +116,7 @@ json_data = {
 #functions
 #===================================================================
 def find_immediate_urgency_entries(url):
+    global update_time  # Ensure update_time is the global variable
     response = requests.get(url)
     if response.status_code != 200:
         #print("Failed to fetch the file from the server.")
@@ -136,6 +139,12 @@ def find_immediate_urgency_entries(url):
         #print(f"ParseError: {e}")
         logging.info(f"ParseError: {e}")
         return []
+
+    # Capture the <updated> tag's value
+    updated_element = root.find('default:updated', namespaces)
+    if updated_element is not None:
+        update_time = updated_element.text
+        #print(update_time) #debug
 
     for entry in root.findall('default:entry', namespaces):
         urgency_element = entry.find('cap:urgency', namespaces)
@@ -242,14 +251,91 @@ def insert_data(date, event, title, link, summary, areas, coordinates):
     VALUES (%s, %s, %s, %s, %s, %s, ST_GeomFromText(%s))
     """
     areas_json = json.dumps(areas)  # Convert areas list to JSON string
-    event_str = '; '.join(event)  # Convert event list to a string
     try:
-        logging.info(f"Executing query: {insert_query}")
-        logging.info(f"Parameters: {date}, {event_str}, {title}, {link}, {summary}, {areas_json}, {coordinates}")
-        cursor.execute(insert_query, (date, event_str, title, link, summary, areas_json, coordinates))
+        cursor.execute(insert_query, (date, event, title, link, summary, areas_json, coordinates))
         conn.commit()
-    except mysql.connector.Error as e:
+    except pymysql.MySQLError as e:
         logging.error(f"Error inserting data: {e}")
+
+# Function to generate HTML file
+def generate_html(titles, links, affected_areas_list, published_dates, update_time):
+    #print(update_time)
+    # Combine all the data into a list of tuples
+    combined_data = list(zip(published_dates, titles, links, affected_areas_list))
+    # Sort the combined data by the published date
+    combined_data.sort()
+
+    # Parse the ISO 8601 formatted update_time string
+    update_time_obj = datetime.strptime(update_time[:-6], "%Y-%m-%dT%H:%M:%S")  # Remove the timezone offset for parsing
+    # Convert the update_time to a more readable format
+    formatted_update_time = update_time_obj.strftime("%B %d, %Y %I:%M %p")
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Weather Alerts</title>
+        <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
+        <style>
+            body {{
+                background-color: black;
+                color: white;
+            }}
+            .table-container {{
+                max-height: 80vh;
+                overflow-y: scroll;
+            }}
+            .table {{
+                background-color: #333;
+                color: white;
+            }}
+            .table th, .table td {{
+                border-color: #444;
+            }}
+            .table a {{
+                color: #1e90ff;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Current Weather Alerts</h1>
+            <p>Information last updated: {formatted_update_time} UTC</p>
+            <div class="table-container">
+                <table class="table table-bordered">
+                    <thead>
+                        <tr>
+                            <th>Published Date</th>
+                            <th>Title</th>
+                            <th>County:State</th>
+                            <th>Link</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+    """
+    for date, title, link, areas in combined_data:
+        areas_text = ', '.join(areas)
+        html_content += f"""
+            <tr>
+                <td>{date}</td>
+                <td>{title}</td>
+                <td>{areas_text}</td>
+                <td><a href="{link}" target="_blank">Link</a></td>
+            </tr>
+        """
+
+    html_content += """
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return html_content
+
+
+
 
 #===================================================================
 #main program
@@ -283,7 +369,12 @@ with open(kmlfilename, "w") as file:
 logging.info("KML file created successfully.")
 
 # Connect to the database
-conn = mysql.connector.connect(**db_config)
+conn = pymysql.connect(
+    user=db_config['user'],
+    password=db_config['password'],
+    host=db_config['host'],
+    database=db_config['database']
+)
 cursor = conn.cursor()
 
 # Loop through the data and insert into the database
@@ -315,5 +406,10 @@ with open(json_filename, "w") as json_file:
 
 logging.info(f"JSON data written to {json_filename} successfully.")
 
+# Generate and write the HTML file
+html_content = generate_html(titles, links, affected_areas_list, published_dates, update_time)
+with open(htmlfilename, 'w') as f:
+    f.write(html_content)
+logging.info(f"HTML file '{htmlfilename}' generated successfully.")
+
 logging.info("/////////////////////////////////////////////////////////////////////////////////////\n")
-#TODO - generate html file
