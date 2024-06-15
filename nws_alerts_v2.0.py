@@ -45,6 +45,14 @@ mysql table, alerts2 compatible with this script
 | coordinates | POLYGON  | YES  |     | NULL    |                |
 +-------------+----------+------+-----+---------+----------------+
 '''
+#6/15/2024
+#added search, sort, and paging options from DataTables and jquery to generate_html
+#function
+#TODO install these localy
+#TODO add links for kml, json files.
+#TODO clarify updated date/time to show date/time script was run and date/time nws
+#updated their info.
+#TODO look at changing published date to UTC or EASTERN?  Right now they are local
 #==================================================================
 
 import requests
@@ -62,10 +70,11 @@ update_time = ""
 #===================================================================
 logfilename = "nws_alerts.log"
 kmlfilename = "nws_alerts.kml"
+#httpfilename = "/home/medukonis/bin/nws_alerts.html"
 jsonfilename = "nws_alerts.json"
 htmlfilename = "nws_alerts.html"
 # URL of the file on the server
-#url = 'https://edukonis.com/~medukonis/active.atom' #for testing
+#url = 'https://edukonis.com/~medukonis/active.atom'
 url = 'https://alerts.weather.gov/cap/us.php?x=0'
 
 
@@ -76,8 +85,8 @@ logging.info("//////////////////////////////////////////////////////////////////
 #Database connection
 #===================================================================
 db_config = {
-    'user':     '',
-    'password': '',
+    'user':     'medukonis',
+    'password': 'Summers@2024!!',
     'host':     'localhost',
     'database': 'weather_alerts_2024'
 }
@@ -257,18 +266,17 @@ def insert_data(date, event, title, link, summary, areas, coordinates):
     except pymysql.MySQLError as e:
         logging.error(f"Error inserting data: {e}")
 
-# Function to generate HTML file
 def generate_html(titles, links, affected_areas_list, published_dates, update_time):
-    #print(update_time)
+    import pytz
+    from datetime import datetime
+
+    eastern = pytz.timezone('US/Eastern')
+    update_time_utc = datetime.strptime(update_time, "%Y-%m-%dT%H:%M:%S%z")
+    update_time_eastern = update_time_utc.astimezone(eastern)
+    formatted_update_time = update_time_eastern.strftime("%B %d, %Y %I:%M %p %Z")
+
     # Combine all the data into a list of tuples
     combined_data = list(zip(published_dates, titles, links, affected_areas_list))
-    # Sort the combined data by the published date
-    combined_data.sort()
-
-    # Parse the ISO 8601 formatted update_time string
-    update_time_obj = datetime.strptime(update_time[:-6], "%Y-%m-%dT%H:%M:%S")  # Remove the timezone offset for parsing
-    # Convert the update_time to a more readable format
-    formatted_update_time = update_time_obj.strftime("%B %d, %Y %I:%M %p")
 
     html_content = f"""
     <!DOCTYPE html>
@@ -276,6 +284,7 @@ def generate_html(titles, links, affected_areas_list, published_dates, update_ti
     <head>
         <title>Weather Alerts</title>
         <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
+        <link rel="stylesheet" href="https://cdn.datatables.net/1.10.25/css/dataTables.bootstrap4.min.css">
         <style>
             body {{
                 background-color: black;
@@ -300,9 +309,9 @@ def generate_html(titles, links, affected_areas_list, published_dates, update_ti
     <body>
         <div class="container">
             <h1>Current Weather Alerts</h1>
-            <p>Information last updated: {formatted_update_time} UTC</p>
+            <p>Information last updated: {formatted_update_time}</p>
             <div class="table-container">
-                <table class="table table-bordered">
+                <table id="alertsTable" class="table table-bordered">
                     <thead>
                         <tr>
                             <th>Published Date</th>
@@ -329,6 +338,14 @@ def generate_html(titles, links, affected_areas_list, published_dates, update_ti
                 </table>
             </div>
         </div>
+        <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+        <script src="https://cdn.datatables.net/1.10.25/js/jquery.dataTables.min.js"></script>
+        <script src="https://cdn.datatables.net/1.10.25/js/dataTables.bootstrap4.min.js"></script>
+        <script>
+            $(document).ready(function() {{
+                $('#alertsTable').DataTable();
+            }});
+        </script>
     </body>
     </html>
     """
