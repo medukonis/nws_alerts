@@ -29,30 +29,47 @@
 #xml parsing. Added logging, mysql storage supports POLYGON and
 #JSON data types updated data types in script to utilize.
 
-#TODO - add event to database DONE 5/27/24
+#5/27/24
+#add event to database DONE 5/27/24
 '''
 mysql table, alerts2 compatible with this script
-+-------------+----------+------+-----+---------+----------------+
 | Field       | Type     | Null | Key | Default | Extra          |
-+-------------+----------+------+-----+---------+----------------+
+|-------------|----------|------|-----|---------|----------------|
 | id          | int      | NO   | PRI | NULL    | auto_increment |
 | date        | datetime | YES  |     | NULL    |                |
 | event       | text     | YES  |     | NULL    |                |
 | title       | text     | YES  |     | NULL    |                |
 | link        | text     | YES  |     | NULL    |                |
 | summary     | text     | YES  |     | NULL    |                |
-| areas       | JSON     | YES  |     | NULL    |                |
-| coordinates | POLYGON  | YES  |     | NULL    |                |
-+-------------+----------+------+-----+---------+----------------+
+| areas       | json     | YES  |     | NULL    |                |
+| coordinates | polygon  | YES  |     | NULL    |                |
+
+CREATE TABLE weather_alerts (
+    id INT NOT NULL AUTO_INCREMENT,
+    date DATETIME,
+    event TEXT,
+    title TEXT,
+    link TEXT,
+    summary TEXT,
+    areas JSON,
+    coordinates POLYGON,
+    PRIMARY KEY (id)
+);
+
 '''
 #6/15/2024
 #added search, sort, and paging options from DataTables and jquery to generate_html
 #function
 #TODO install these localy
 #TODO add links for kml, json files.
-#TODO clarify updated date/time to show date/time script was run and date/time nws
-#updated their info.
-#TODO look at changing published date to UTC or EASTERN?  Right now they are local
+#DONE - clarify updated date/time to show date/time script was run and date/time nws
+#updated their info. DONE 6/17 added map to main page
+#TODO look at changing published dates to UTC or EASTERN?  Right now they are local
+
+#6/17/2024
+#Added map to main page - still have option for kml but google no longer required.
+#6/19/2024
+#DONE - updated different polygon colors based on event (generate_html function)
 #==================================================================
 
 import requests
@@ -85,8 +102,8 @@ logging.info("//////////////////////////////////////////////////////////////////
 #Database connection
 #===================================================================
 db_config = {
-    'user':     'medukonis',
-    'password': 'Summers@2024!!',
+    'user':     '',
+    'password': '',
     'host':     'localhost',
     'database': 'weather_alerts_2024'
 }
@@ -187,11 +204,13 @@ def find_immediate_urgency_entries(url):
                 txtevent = event_element.text.split('; ')
                 events.append(txtevent)
             polygon = entry.find('cap:polygon', namespaces)
-            if polygon is not None:
+            if polygon is not None and polygon.text is not None:
                 points = polygon.text.strip().split(' ')
                 points = [tuple(map(float, point.split(','))) for point in points]
                 mysql_polygon = 'POLYGON((' + ','.join([f'{lat} {lon}' for lon, lat in points]) + '))'
                 polygons.append(mysql_polygon)
+            else:
+                logging.info("Polygon data is missing for an entry.")
 
 
 # Function to check if all lists have the same length
@@ -268,12 +287,13 @@ def insert_data(date, event, title, link, summary, areas, coordinates):
 
 def generate_html(titles, links, affected_areas_list, published_dates, update_time):
     import pytz
-    from datetime import datetime
 
     eastern = pytz.timezone('US/Eastern')
     update_time_utc = datetime.strptime(update_time, "%Y-%m-%dT%H:%M:%S%z")
     update_time_eastern = update_time_utc.astimezone(eastern)
     formatted_update_time = update_time_eastern.strftime("%B %d, %Y %I:%M %p %Z")
+    now = datetime.now(eastern)
+    formatted_now = now.strftime("%B %d, %Y %I:%M %p %Z")
 
     # Combine all the data into a list of tuples
     combined_data = list(zip(published_dates, titles, links, affected_areas_list))
@@ -286,41 +306,109 @@ def generate_html(titles, links, affected_areas_list, published_dates, update_ti
         <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
         <link rel="stylesheet" href="https://cdn.datatables.net/1.10.25/css/dataTables.bootstrap4.min.css">
         <style>
-            body {{
-                background-color: black;
-                color: white;
-            }}
-            .table-container {{
-                max-height: 80vh;
-                overflow-y: scroll;
-            }}
-            .table {{
-                background-color: #333;
-                color: white;
-            }}
-            .table th, .table td {{
-                border-color: #444;
-            }}
-            .table a {{
-                color: #1e90ff;
-            }}
-        </style>
+        body {{
+            background-color: black;
+            color: white;
+        }}
+        .table-container {{
+            max-height: 80vh;
+            overflow-y: scroll;
+        }}
+        .table {{
+            background-color: #333;
+            color: white;
+       }}
+        .table th, .table td {{
+            border-color: #444;
+        }}
+        .table a {{
+            color: #1e90ff;
+        }}
+        #mapTable td {{
+            padding: 0;
+        }}
+        #map {{
+            height: 500px; /* Adjust the height as needed */
+        }}
+    </style>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-omnivore@0.3.3/leaflet-omnivore.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment-timezone/0.5.34/moment-timezone-with-data.min.js"></script>
+    <script src="https://unpkg.com/esri-leaflet@2.5.3/dist/esri-leaflet.js"></script>
+    <script>
+        function initMap() {{
+            var map = L.map('map').setView([37.7749, -122.4194], 10);
+            L.esri.basemapLayer('Streets').addTo(map); // Using ArcGIS Roadmap tiles
+
+            var kmlLayer = omnivore.kml('nws_alerts.kml')
+                .on('ready', function() {{
+                    map.fitBounds(kmlLayer.getBounds());
+                }})
+                .on('layeradd', function(e) {{
+                    var layer = e.layer;
+                    if (layer.feature && layer.feature.properties && layer.feature.properties.description) {{
+                        var description = layer.feature.properties.description;
+                        layer.bindPopup(description);
+
+                        // Check for keywords and change style if needed
+                        if (description.includes('Tropical')) {{
+                            layer.setStyle({{
+                                color: 'green',
+                                fillColor: 'green',
+                                fillOpacity: 0.5
+                            }});
+                        }} else if (description.includes('Hurricane')) {{
+                            layer.setStyle({{
+                                color: 'magenta',
+                                fillColor: 'magenta',
+                                fillOpacity: 0.5
+                            }});
+                        }} else if (description.includes('Thunderstorm')) {{
+                            layer.setStyle({{
+                                color: 'yellow',
+                                fillColor: 'yellow',
+                                fillOpacity: 0.5
+                            }});
+                        }} else if (description.includes('Flood')) {{
+                            layer.setStyle({{
+                                color: 'blue',
+                                fillColor: 'blue',
+                                fillOpacity: 0.5
+                            }});
+                        }}
+                    }}
+                }})
+                .addTo(map);
+        }}
+        document.addEventListener('DOMContentLoaded', initMap);
+    </script>
     </head>
     <body>
         <div class="container">
-            <h1>Current Weather Alerts</h1>
-            <p>Information last updated: {formatted_update_time}</p>
+            <h1>Current NWS Weather Alerts</h1>
+            <p>Information last updated by NWS: <b>{formatted_update_time}</b> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Script last run:<b> {formatted_now}</b></p>
             <div class="table-container">
-                <table id="alertsTable" class="table table-bordered">
-                    <thead>
-                        <tr>
-                            <th>Published Date</th>
-                            <th>Title</th>
-                            <th>County:State</th>
-                            <th>Link</th>
-                        </tr>
-                    </thead>
+                <table id="mapTable" class="table table-bordered">
                     <tbody>
+                        <tr>
+                            <td><div id="map"></div></td>
+                        </tr>
+                    </tbody>
+                </table>
+        </div>
+        <div class="table-container">
+            <table id="alertsTable" class="table table-bordered">
+                <thead>
+                    <tr>
+                        <th>Published Date</th>
+                        <th>Title</th>
+                        <th>County:State</th>
+                        <th>Link</th>
+                    </tr>
+                </thead>
+                <tbody>
     """
     for date, title, link, areas in combined_data:
         areas_text = ', '.join(areas)
@@ -430,3 +518,5 @@ with open(htmlfilename, 'w') as f:
 logging.info(f"HTML file '{htmlfilename}' generated successfully.")
 
 logging.info("/////////////////////////////////////////////////////////////////////////////////////\n")
+
+
