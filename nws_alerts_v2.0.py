@@ -55,7 +55,6 @@ CREATE TABLE weather_alerts (
     coordinates POLYGON,
     PRIMARY KEY (id)
 );
-
 '''
 #6/15/2024
 #added search, sort, and paging options from DataTables and jquery to generate_html
@@ -65,11 +64,18 @@ CREATE TABLE weather_alerts (
 #DONE - clarify updated date/time to show date/time script was run and date/time nws
 #updated their info. DONE 6/17 added map to main page
 #TODO look at changing published dates to UTC or EASTERN?  Right now they are local
-
 #6/17/2024
 #Added map to main page - still have option for kml but google no longer required.
 #6/19/2024
 #DONE - updated different polygon colors based on event (generate_html function)
+#BUG - tropical storm warnings for TX appearing up in MN.  Log indicates:
+# 2024-06-19 12:45:02,354 - ERROR - Lists have different lengths.
+#7/7/2024
+#Fixed misaligned data when a polygon is not provided for a weather event
+#7/8/2024
+#TODO Hurricane Beryl hit TX and many counties were under multiple types of watches/warnings
+#You can only click on and view the top layer.  Need a way to turn off layers so you can
+#click on the ones underneath.
 #==================================================================
 
 import requests
@@ -210,6 +216,7 @@ def find_immediate_urgency_entries(url):
                 mysql_polygon = 'POLYGON((' + ','.join([f'{lat} {lon}' for lon, lat in points]) + '))'
                 polygons.append(mysql_polygon)
             else:
+                polygons.append(None)  # Append None if polygon data is missing    #change for missing polygons
                 logging.info("Polygon data is missing for an entry.")
 
 
@@ -261,7 +268,7 @@ def polygon_to_kml(polygon, event, title, link, summary, published_date, affecte
 def generate_kml(polygons, events, titles, links, summaries, published_dates, affected_areas_list):
     placemarks = ''.join(
         polygon_to_kml(polygons[i], events[i], titles[i], links[i], summaries[i], published_dates[i], affected_areas_list[i])
-        for i in range(len(polygons))
+        for i in range(len(polygons)) if polygons[i] is not None
     )
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
@@ -274,13 +281,21 @@ def generate_kml(polygons, events, titles, links, summaries, published_dates, af
 
 # Function to insert data into the alerts2 table
 def insert_data(date, event, title, link, summary, areas, coordinates):
-    insert_query = """
-    INSERT INTO alerts2 (date, event, title, link, summary, areas, coordinates)
-    VALUES (%s, %s, %s, %s, %s, %s, ST_GeomFromText(%s))
-    """
-    areas_json = json.dumps(areas)  # Convert areas list to JSON string
+    if coordinates is not None:
+        insert_query = """
+        INSERT INTO alerts2 (date, event, title, link, summary, areas, coordinates)
+        VALUES (%s, %s, %s, %s, %s, %s, ST_GeomFromText(%s))
+        """
+        values = (date, event, title, link, summary, json.dumps(areas), coordinates)
+    else:  #if no polygon provided
+        insert_query = """
+        INSERT INTO alerts2 (date, event, title, link, summary, areas, coordinates)
+        VALUES (%s, %s, %s, %s, %s, %s, NULL)
+        """
+        values = (date, event, title, link, summary, json.dumps(areas))
+
     try:
-        cursor.execute(insert_query, (date, event, title, link, summary, areas_json, coordinates))
+        cursor.execute(insert_query, values)
         conn.commit()
     except pymysql.MySQLError as e:
         logging.error(f"Error inserting data: {e}")
@@ -353,7 +368,7 @@ def generate_html(titles, links, affected_areas_list, published_dates, update_ti
                         layer.bindPopup(description);
 
                         // Check for keywords and change style if needed
-                        if (description.includes('Tropical')) {{
+                        if (description.includes('Tropical Storm')) {{
                             layer.setStyle({{
                                 color: 'green',
                                 fillColor: 'green',
@@ -365,16 +380,22 @@ def generate_html(titles, links, affected_areas_list, published_dates, update_ti
                                 fillColor: 'magenta',
                                 fillOpacity: 0.5
                             }});
-                        }} else if (description.includes('Thunderstorm')) {{
+                        }} else if (description.includes('Severe Thunderstorm')) {{
                             layer.setStyle({{
-                                color: 'yellow',
-                                fillColor: 'yellow',
+                                color: 'orange',
+                                fillColor: 'orange',
                                 fillOpacity: 0.5
                             }});
                         }} else if (description.includes('Flood')) {{
                             layer.setStyle({{
                                 color: 'blue',
                                 fillColor: 'blue',
+                                fillOpacity: 0.5
+                            }});
+                      }} else if (description.includes('Tornado')) {{
+                            layer.setStyle({{
+                                color: 'purple',
+                                fillColor: 'purple',
                                 fillOpacity: 0.5
                             }});
                         }}
