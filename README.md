@@ -28,7 +28,7 @@ The script:
 
 ## Version History
 
-### v3.0 — JSON API Migration (Current)
+### v3.0 — JSON API Migration (12/21/2025)(Current)
 
 **Why this update exists**
 
